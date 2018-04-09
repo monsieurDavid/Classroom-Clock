@@ -4,20 +4,14 @@
   2016
   http://jdeboi.com/
 
-  CLASSROOM CLOCK
-  This customizable Arduino clock was developed for the Isidore
-  Newman School Makerspace. Some of the features include:
-  - tracks and displays Newman's rotating block (A, B, C...)
-  - uses a red->green color gradient to show the amount of time
-    remaining in the period
-  - flashes between the time and a countdown timer when the end
-    of the period approaches
-  - rainbows during lunch and Assembly, pulses after school...
-  And so much more! Add your own functions to make School Clock
-  even cooler!
+  CLASSROOM CLOCK with tone()
+  A customization to the CLASSROOM CLOCK: adding a sound
+  when the countdown timer is triggered.
 
 */
 /////////////////////////////////////////////////////////
+
+#include "pitches.h"
 
 #include "classroomClock.h"
 #include <Wire.h>
@@ -43,6 +37,7 @@ uint8_t timeBlockIndex = 0;
 DateTime lastFlash;    // for countdown "flash"
 boolean flashOn = false;
 long lastSpeedTest = 0;
+boolean playedTone = false;
 
 byte numbers[] = {
   B11101110,    // 0
@@ -75,15 +70,15 @@ byte letters[] = {
 /////////////////////////////////////////////////////////
 
 /*
- * Set the functionality of the extra digit
- * show nothing in the extra digit is mode 0
- * show rotating block is mode 1
- * show period number is mode 2
+   Set the functionality of the extra digit
+   show nothing in the extra digit is mode 0
+   show rotating block is mode 1
+   show period number is mode 2
 */
 int extraDigitMode = 1;
 
 // setup for a rotating block schedule
-uint8_t currentBlock = D_BLOCK;
+uint8_t currentBlock = A_BLOCK;
 
 // this number should match the number of entries in schedule[]
 const uint8_t numTimeBlocks = 9;
@@ -110,6 +105,10 @@ uint8_t vacations[numVacations][3] = {
   {2016, 3, 30}
 };
 
+// these are the array indicies of non-academic time blocks
+const uint8_t assemblyBlock = 2;
+const uint8_t lunchBlock = 6;
+
 // number of minutes before end of class when countdown clock is triggered
 uint8_t countdownM = 6;
 uint8_t secBetweenFlashes = 4;
@@ -120,14 +119,13 @@ uint8_t secBetweenFlashes = 4;
 /////////////////////////////////////////////////////////
 void setup() {
   Serial.begin(57600);
-  if (DEBUG) Serial.begin(57600);
   /*
-   * For testing purposes, you can set the clock to custom values, e.g.:
-   * initChronoDot(year, month, day, hour, minute, seconds);
-   * Otherwise, the clock automatically sets itself to your computer's
-   * time with the function initChronoDot();
+     For testing purposes, you can set the clock to custom values, e.g.:
+     initChronoDot(year, month, day, hour, minute, seconds);
+     Otherwise, the clock automatically sets itself to your computer's
+     time with the function initChronoDot();
   */
-  // initChronoDot(2016, 11, 7, 15, 59, 50);
+  //initChronoDot(2016, 11, 7, 8, 54, 50);
   initChronoDot();
   strip.begin();
   strip.show();
@@ -138,7 +136,7 @@ void setup() {
 void loop() {
   now = RTC.now();
   if (isEndOfDay()) nextDay();
-  if (isSchoolDay()) checkBlock();
+  checkBlock();
   displayClock();
 }
 
@@ -148,8 +146,7 @@ void loop() {
 /////////////////////////////////////////////////////////
 
 void displayClock() {
-  if (isWeekend()) colorClock(Wheel(0));
-  else if (!isSchoolDay()) colorClock(Wheel(20));
+  if (!isSchoolDay()) colorClock(Wheel(0));
   else if (isBeforeSchool()) pulseClock(Wheel(40), 5);
   else if (isAfterSchool()) colorClock(Wheel(100));
   else if (isEndFlash()) countdownClock();
@@ -232,11 +229,24 @@ boolean isAfterTime(uint8_t h0, uint8_t m0, uint8_t h1, uint8_t m1) {
   return false;
 }
 
+boolean isAfterTime(uint8_t h0, uint8_t m0, uint8_t s0, uint8_t h1, uint8_t m1, uint8_t s1) {
+  if (timeDiff(h0, m0, s0, h1, m1, s0) >= 0) return true;
+  return false;
+}
+
 // returns the difference in minutes
 // later time first
 int timeDiff(uint8_t h0, uint8_t m0, uint8_t h1, uint8_t m1) {
   uint16_t t0 = h0 * 60 + m0;
   uint16_t t1 = h1 * 60 + m1;
+  return t0 - t1;
+}
+
+// returns the difference in seconds
+// later time first
+int timeDiff(uint8_t h0, uint8_t m0, uint8_t s0, uint8_t h1, uint8_t m1, uint8_t s1) {
+  uint16_t t0 = h0 * 60 * 60 + m0 * 60 + s0;
+  uint16_t t1 = h1 * 60 * 60 + m1 * 60 + s1;
   return t0 - t1;
 }
 
@@ -255,6 +265,11 @@ boolean isEndFlash() {
     return false;
   }
   if (timeDiff(h, m, now.hour(), now.minute())  < countdownM) {
+    if (!playedTone) {
+      Serial.println("tone!");
+      alarm();
+      playedTone = true;
+    }
     if (DEBUG) {
       Serial.print("End Flash: ");
       Serial.print(timeDiff( h, m, now.hour(), now.minute()));
@@ -266,24 +281,23 @@ boolean isEndFlash() {
     }
     return flashOn;
   }
+  playedTone = false;
   return false;
 }
 
 boolean isSchoolDay() {
-  if (isWeekend()) return false;
+  // 0 = Sunday, 1 = Monday, ...., 6 = Saturday
+  if (now.dayOfWeek() == 0 || now.dayOfWeek() == 6) {
+    if (DEBUG) Serial.println("Weekend!");
+    return false;
+  }
   else if (isVacation()) return false;
   return true;
 }
 
-boolean isWeekend() {
-  // 0 = Sunday, 1 = Monday, ...., 6 = Saturday
-  if (now.dayOfWeek() == 0 || now.dayOfWeek() == 6) return true;
-  return false;
-}
-
 boolean isVacation() {
   for (int i = 0; i < numVacations; i++) {
-    if(now.year() == vacations[i][0] && now.month() == vacations[i][1] && now.day() == vacations[i][2]) {
+    if (now.year() == vacations[i][0] && now.month() == vacations[i][1] && now.day() == vacations[i][2]) {
       return true;
     }
   }
@@ -296,17 +310,17 @@ boolean isBetweenTime(uint8_t h0, uint8_t m0, uint8_t h1, uint8_t m1) {
   return (now.unixtime() >= startTime.unixtime() && now.unixtime() < endTime.unixtime());
 }
 
-boolean isLunch() {
-  if (schedule[timeBlockIndex][4] == LUNCH) {
-    if (DEBUG) Serial.println("Lunch!");
+boolean isAssembly() {
+  if (isBetweenTime(schedule[assemblyBlock][0], schedule[assemblyBlock][1], schedule[assemblyBlock][2], schedule[assemblyBlock][3])) {
+    if (DEBUG) Serial.println("Assembly!");
     return true;
   }
   return false;
 }
 
-boolean isAssembly() {
-  if (schedule[timeBlockIndex][4] == ASSEMBLY) {
-    if (DEBUG) Serial.println("Assembly!");
+boolean isLunch() {
+  if (isBetweenTime(schedule[lunchBlock][0], schedule[lunchBlock][1], schedule[lunchBlock][2], schedule[lunchBlock][3])) {
+    if (DEBUG) Serial.println("Lunch!");
     return true;
   }
   return false;
@@ -347,14 +361,6 @@ boolean isBetweenTimeBlocks() {
 
 boolean isHourChange() {
   if (now.minute() == 0 && now.second() < 15) return true;
-  return false;
-}
-
-boolean isEnd() {
-  uint8_t h = schedule[currentPeriod][2];
-  uint8_t m = schedule[currentPeriod][3];
-  DateTime endTime (now.year(), now.month(), now.day(), h, m, 0);
-  if (endTime.unixtime() - now.unixtime()  < 7 * 60) return true;
   return false;
 }
 
@@ -580,17 +586,17 @@ void displayMinute(uint8_t m, uint32_t col) {
 }
 
 void displayLetter(uint8_t letter, uint32_t col) {
-//  if (letter < 8) {
-//    for (int i = 0; i < 7; i++) {
-//      if (letters[letter] & (1 << 7 - i)) strip.setPixelColor(i, col);
-//      else strip.setPixelColor(i, 0);
-//    }
-//  }
-//  else {
-//    for (int i = 0; i < 7; i++) {
-//      strip.setPixelColor(i, 0);
-//    }
-//  }
+  if (letter < 8) {
+    for (int i = 0; i < 7; i++) {
+      if (letters[letter] & (1 << 7 - i)) strip.setPixelColor(i, col);
+      else strip.setPixelColor(i, 0);
+    }
+  }
+  else {
+    for (int i = 0; i < 7; i++) {
+      strip.setPixelColor(i, 0);
+    }
+  }
 }
 
 // Input a value 0 to 255 to get a color value.
@@ -691,3 +697,24 @@ void printClock() {
     Serial.println(now.second());
   }
 }
+
+/*
+ * Pass a time that you'd like the alarm to go off
+ * as well as the amount of time (alarmSeconds) that you'd like it to go off
+ */
+void checkCustomAlarm(int hr, int mn, int sec, int alarmSeconds) {
+  DateTime startAlarm (now.year(), now.month(), now.day(), hr, mn, sec);
+  if (now.unixtime() > startAlarm.unixtime() && now.unixtime() < startAlarm.unixtime() + alarmSeconds) {
+    alarm(); 
+  }
+}
+
+void alarm() {
+  int melody [] = {NOTE_G6, NOTE_B6, NOTE_A6, NOTE_G6, NOTE_B5};
+  for (int i = 0; i < 5; i++) {
+    tone(8, melody[i], 500);
+    delay(800);
+  }
+  noTone(8);
+}
+
